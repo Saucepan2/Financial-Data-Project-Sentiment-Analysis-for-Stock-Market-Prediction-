@@ -1,0 +1,91 @@
+import pandas as pd
+import numpy as np
+import tweepy
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+import yfinance as yf
+
+# Step 1: Setting up Twitter API for data collection
+def twitter_api_setup(api_key, api_secret, access_token, access_token_secret):
+    """Initializes the Twitter API client."""
+    auth = tweepy.OAuth1UserHandler(api_key, api_secret, access_token, access_token_secret)
+    api = tweepy.API(auth)
+    return api
+
+# Step 2: Collect tweets
+def fetch_tweets(api, query, count):
+    """Fetch tweets matching a query."""
+    tweets = api.search_tweets(q=query, count=count, lang='en')
+    data = [{'text': tweet.text, 'created_at': tweet.created_at} for tweet in tweets]
+    return pd.DataFrame(data)
+
+# Step 3: Sentiment Analysis
+def analyze_sentiment(tweets):
+    """Analyze sentiment of tweets using VADER."""
+    analyzer = SentimentIntensityAnalyzer()
+    tweets['sentiment'] = tweets['text'].apply(lambda x: analyzer.polarity_scores(x)['compound'])
+    tweets['label'] = tweets['sentiment'].apply(lambda x: 1 if x > 0 else (0 if x == 0 else -1))
+    return tweets
+
+# Step 4: Merge with Stock Data
+def get_stock_data(ticker, start_date, end_date):
+    """Fetch historical stock data."""
+    data = yf.download(ticker, start=start_date, end=end_date)
+    data['date'] = data.index
+    return data[['date', 'Close']]
+
+def merge_data(sentiment_data, stock_data):
+    """Merge sentiment data with stock data."""
+    sentiment_data['date'] = pd.to_datetime(sentiment_data['created_at']).dt.date
+    stock_data['date'] = pd.to_datetime(stock_data['date']).dt.date
+    merged_data = pd.merge(sentiment_data, stock_data, on='date', how='inner')
+    return merged_data
+
+# Step 5: Model Training
+def train_model(data):
+    """Train a Random Forest classifier to predict stock movement."""
+    data['price_movement'] = data['Close'].pct_change().apply(lambda x: 1 if x > 0 else 0).shift(-1)
+    data = data.dropna()
+    X = data[['sentiment']]
+    y = data['price_movement']
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    model.fit(X_train, y_train)
+    
+    y_pred = model.predict(X_test)
+    print("Accuracy:", accuracy_score(y_test, y_pred))
+    print(classification_report(y_test, y_pred))
+    return model
+
+# Execution
+if __name__ == "__main__":
+    # Twitter API credentials (replace with actual keys)
+    api_key = "your_api_key"
+    api_secret = "your_api_secret"
+    access_token = "your_access_token"
+    access_token_secret = "your_access_token_secret"
+
+    # Initialize Twitter API
+    api = twitter_api_setup(api_key, api_secret, access_token, access_token_secret)
+
+    # Step 1: Fetch tweets
+    query = "Tesla"
+    tweets = fetch_tweets(api, query, count=100)
+
+    # Step 2: Analyze sentiment
+    tweets_with_sentiment = analyze_sentiment(tweets)
+
+    # Step 3: Get stock data
+    ticker = "TSLA"
+    start_date = "2023-01-01"
+    end_date = "2023-12-31"
+    stock_data = get_stock_data(ticker, start_date, end_date)
+
+    # Step 4: Merge data
+    merged_data = merge_data(tweets_with_sentiment, stock_data)
+
+    # Step 5: Train model
+    trained_model = train_model(merged_data)
